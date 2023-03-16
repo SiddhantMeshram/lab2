@@ -8,31 +8,9 @@
 #include <fstream>
 #include <queue>
 #include <sstream>
+#include <memory>
 
 using namespace std;
-
-enum ProcessState{
-  CREATED=0,
-  READY,
-  RUNNING,
-  BLOCKED
-};
-
-string ProcessStateToString(int ps) {
-
-  switch (ps) {
-  case CREATED:
-    return "CREATED";
-  case READY:
-    return "READY";
-  case RUNNING:
-    return "RUNNG";
-  case BLOCKED:
-    return "BLOCK";
-  }
-
-  return "";
-}
 
 vector<int> randvals;
 int ofs = 0;
@@ -78,8 +56,32 @@ class Process {
       cpu_wait_time(0),
       current_cpu_burst(0) {}
 
+    enum ProcessState{
+      CREATED=0,
+      READY,
+      RUNNING,
+      BLOCKED
+    };
+
+    static string ProcessStateToString(int ps) {
+
+      switch (ps) {
+      case CREATED:
+        return "CREATED";
+      case READY:
+        return "READY";
+      case RUNNING:
+        return "RUNNG";
+      case BLOCKED:
+        return "BLOCK";
+      }
+
+      return "";
+    }
+
   public:
     static int count;
+
     int pid;
     int arrival_time;
     int total_cpu_time;
@@ -94,7 +96,7 @@ class Process {
     int time_in_blocked;
     int cpu_wait_time;
     int current_cpu_burst;
-    int ready_state_transition_event_id;
+    int last_ready_state_trans_event_id;
 };
 
 class Scheduler {
@@ -151,21 +153,18 @@ class Srtf: public Scheduler {
           } else {
             // To handle cases where remaining time is same, use the event id
             // to figure out which process was queued first.
-            return (process1->ready_state_transition_event_id >
-                      process2->ready_state_transition_event_id);
+            return (process1->last_ready_state_trans_event_id >
+                      process2->last_ready_state_trans_event_id);
           }
         }
     };
 
     priority_queue<shared_ptr<Process>, vector<shared_ptr<Process>>,
                    Comparator> run_queue;
-    priority_queue<shared_ptr<Process>, vector<shared_ptr<Process>>,
-                  Comparator> copy_run_queue;
   
   public:
     void AddProcess(shared_ptr<Process> process) {
       run_queue.push(process);
-      // PrintRunQueue();
     }
 
     shared_ptr<Process> GetNextProcess() {
@@ -176,17 +175,6 @@ class Srtf: public Scheduler {
       }
 
       return nullptr;
-    }
-
-    void PrintRunQueue() {
-      priority_queue<shared_ptr<Process>, vector<shared_ptr<Process>>,
-                     Comparator> copy_run_queue(run_queue);
-      
-      while (!copy_run_queue.empty()) {
-        auto p = copy_run_queue.top();
-        cout << "PrintRunQueue " << p->pid << " " << p->remaining_cpu_time << endl;
-        copy_run_queue.pop();
-      }
     }
 };
 
@@ -225,35 +213,35 @@ class Event {
       TRANS_TO_BLOCK
     };
 
-  public:
-    static int count;
-    int timestamp;
-    shared_ptr<Process> process;
-    int old_process_state;
-    int new_process_state;
-    int event_id;
-  
-  public:
     int GetTransition() {
-      if (old_process_state == ProcessState::CREATED &&
-          new_process_state == ProcessState::READY) {
+      if (old_process_state == Process::ProcessState::CREATED &&
+          new_process_state == Process::ProcessState::READY) {
         return TRANS_TO_READY;
-      } else if (old_process_state == ProcessState::READY &&
-                 new_process_state == ProcessState::RUNNING) {
+      } else if (old_process_state == Process::ProcessState::READY &&
+                 new_process_state == Process::ProcessState::RUNNING) {
         return TRANS_TO_RUN;
-      } else if (old_process_state == ProcessState::RUNNING &&
-                 new_process_state == ProcessState::BLOCKED) {
+      } else if (old_process_state == Process::ProcessState::RUNNING &&
+                 new_process_state == Process::ProcessState::BLOCKED) {
         return TRANS_TO_BLOCK;
-      } else if (old_process_state == ProcessState::BLOCKED &&
-                 new_process_state == ProcessState::READY) {
+      } else if (old_process_state == Process::ProcessState::BLOCKED &&
+                 new_process_state == Process::ProcessState::READY) {
         return TRANS_TO_READY;
-      } else if (old_process_state == ProcessState::RUNNING &&
-                 new_process_state == ProcessState::READY) {
+      } else if (old_process_state == Process::ProcessState::RUNNING &&
+                 new_process_state == Process::ProcessState::READY) {
         return TRANS_TO_PREEMPT;
       }
 
       return -1;
     }
+
+  public:
+    static int count;
+
+    int timestamp;
+    shared_ptr<Process> process;
+    int old_process_state;
+    int new_process_state;
+    int event_id;
 };
 
 class Des {
@@ -297,8 +285,9 @@ class Des {
     }
 };
 
-// Global variables.
+//-----------------------------------------------------------------------------
 
+// Global variables.
 shared_ptr<Scheduler> _scheduler = nullptr;
 deque<shared_ptr<Process>> _process_queue;
 Des _des;
@@ -310,6 +299,7 @@ int _total_blocked_count = 0;
 int _block_start_time = 0;
 int _total_block_time = 0;
 int _quantum = 10000;
+int _maxprio = 4;
 
 void ReadInput(const string& input_file, const int maxprio) {
 
@@ -329,6 +319,8 @@ void ReadInput(const string& input_file, const int maxprio) {
   input.close();
 }
 
+//-----------------------------------------------------------------------------
+
 string GetCommonLogString(int current_time, int pid, int time_in_prev_state,
                           int old_process_state = -1,
                           int new_process_state = -1) {
@@ -336,12 +328,14 @@ string GetCommonLogString(int current_time, int pid, int time_in_prev_state,
   s << current_time << " " << pid << " " << time_in_prev_state << ": ";
 
   if (old_process_state != -1) {
-    s << ProcessStateToString(old_process_state) << " -> "
-      << ProcessStateToString(new_process_state);
+    s << Process::ProcessStateToString(old_process_state) << " -> "
+      << Process::ProcessStateToString(new_process_state);
   }
   
   return s.str();
 }
+
+//-----------------------------------------------------------------------------
 
 void Simulate() {
   shared_ptr<Event> event;
@@ -361,16 +355,20 @@ void Simulate() {
                                      event->new_process_state)
                << endl;
         }
-        if (event->old_process_state == ProcessState::BLOCKED) {
+
+        if (event->old_process_state == Process::ProcessState::BLOCKED) {
           process->time_in_blocked += time_in_prev_state;
           --_total_blocked_count;
           if (_total_blocked_count == 0) {
+            // If there are no processes in blocked state, calculate the time
+            // when atleast one process was blocked.
             _total_block_time += current_time - _block_start_time;
           }
         }
-        process->current_state = ProcessState::READY;
+
+        process->current_state = Process::ProcessState::READY;
         process->state_transition_ts = current_time;
-        process->ready_state_transition_event_id = event->event_id;
+        process->last_ready_state_trans_event_id = event->event_id;
         _scheduler->AddProcess(process);
         call_scheduler = true;
         break;
@@ -389,7 +387,7 @@ void Simulate() {
                << endl;
         }
 
-        process->current_state = ProcessState::READY;
+        process->current_state = Process::ProcessState::READY;
         process->state_transition_ts = current_time;
         _current_running_process = nullptr;
         _scheduler->AddProcess(process);
@@ -399,9 +397,10 @@ void Simulate() {
       case Event::TransitionState::TRANS_TO_RUN: {
         // Compute its burst and schedule its next steps (block or preempt).
         process->cpu_wait_time += time_in_prev_state;
-        process->current_state = ProcessState::RUNNING;
+        process->current_state = Process::ProcessState::RUNNING;
         process->state_transition_ts = current_time;
         if (process->current_cpu_burst == 0) {
+          // If available cpu burst has expired, get a new cpu burst.
           process->current_cpu_burst = min(MyRandom(process->max_cpu_burst),
                                            process->remaining_cpu_time);
         }
@@ -422,11 +421,11 @@ void Simulate() {
           // The process needs to preempt after the quantum expires.
           new_event = make_shared<Event>(
             current_time + _quantum, process, process->current_state,
-            ProcessState::READY);
+            Process::ProcessState::READY);
         } else {
           new_event = make_shared<Event>(
             current_time + process->current_cpu_burst, process,
-            process->current_state, ProcessState::BLOCKED);
+            process->current_state, Process::ProcessState::BLOCKED);
         }
         _des.AddEvent(new_event);
         break;
@@ -448,17 +447,22 @@ void Simulate() {
                  << process->remaining_cpu_time
                  << endl;
           }
-          process->current_state = ProcessState::BLOCKED;
-          process->state_transition_ts = current_time;
+
           if (_total_blocked_count == 0) {
+            // Note down the time of blocking if no other process is currently
+            // blocked.
             _block_start_time = current_time;
           }
+
           ++_total_blocked_count;
+          process->current_state = Process::ProcessState::BLOCKED;
+          process->state_transition_ts = current_time;
           shared_ptr<Event> new_event = make_shared<Event>(
             current_time + io_burst, process, process->current_state,
-            ProcessState::READY);
+            Process::ProcessState::READY);
           _des.AddEvent(new_event);
         } else {
+          // Process has finished execution.
           if (_verbose) {
             cout << GetCommonLogString(current_time, process->pid,
                                        time_in_prev_state)
@@ -490,12 +494,15 @@ void Simulate() {
         // We have a process that can run. Transition it to running state.
         shared_ptr<Event> new_event = make_shared<Event>(
           current_time, _current_running_process,
-          _current_running_process->current_state, ProcessState::RUNNING);
+          _current_running_process->current_state,
+          Process::ProcessState::RUNNING);
         _des.AddEvent(new_event);
       }
     }
   }
 }
+
+//-----------------------------------------------------------------------------
 
 void PrintOutput(string scheduler_type) {
 
@@ -536,12 +543,12 @@ void PrintOutput(string scheduler_type) {
          io_util, avg_turnaround_time, avg_cpu_wait_time, throughput);
 }
 
+//-----------------------------------------------------------------------------
+
 int main(int argc, char *argv[]) {
 
   string scheduler_type;
   int c;
-  int maxprio = 4;
-
   while((c = getopt(argc, argv, "vs:")) != -1)
     switch (c) {
       case 'v':
@@ -579,12 +586,12 @@ int main(int argc, char *argv[]) {
 
   PopulateRandArray(rand_file);
 
-  ReadInput(input_file, maxprio);
+  ReadInput(input_file, _maxprio);
 
   for (const auto& process : _process_queue) {
     shared_ptr<Event> event = make_shared<Event>(
       process->arrival_time, process, process->current_state,
-      ProcessState::READY);
+      Process::ProcessState::READY);
     _des.AddEvent(event);
   }
 
