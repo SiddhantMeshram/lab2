@@ -54,7 +54,8 @@ class Process {
       remaining_cpu_time(total_cpu_time),
       time_in_blocked(0),
       cpu_wait_time(0),
-      current_cpu_burst(0) {}
+      current_cpu_burst(0),
+      dynamic_priority(static_priority - 1) {}
 
     enum ProcessState{
       CREATED=0,
@@ -97,6 +98,7 @@ class Process {
     int cpu_wait_time;
     int current_cpu_burst;
     int last_ready_state_trans_event_id;
+    int dynamic_priority;
 };
 
 class Scheduler {
@@ -196,6 +198,59 @@ class RoundRobin: public Scheduler {
     }
 };
 
+class Prio: public Scheduler {
+  private:
+    vector<queue<shared_ptr<Process>>> active_queue;
+    vector<queue<shared_ptr<Process>>> expired_queue;
+
+    int maxprio;
+
+  public:
+    Prio (int maxprio) :
+      maxprio(maxprio) {
+
+      active_queue.resize(maxprio);
+      expired_queue.resize(maxprio);
+    }
+
+    void AddProcess(shared_ptr<Process> process) {
+      if (process->dynamic_priority == -1) {
+        process->dynamic_priority = process->static_priority - 1;
+        expired_queue[process->dynamic_priority].push(process);
+        return;
+      }
+
+      active_queue[process->dynamic_priority].push(process);
+    }
+
+    shared_ptr<Process> GetInActiveQueue() {
+      for (int ii = active_queue.size() - 1; ii >= 0; --ii) {
+        if (active_queue[ii].size() != 0) {
+          shared_ptr<Process> p = active_queue[ii].front();
+          active_queue[ii].pop();
+          return p;
+        }
+      }
+
+      return nullptr;
+    }
+
+    shared_ptr<Process> GetNextProcess() {
+      shared_ptr<Process> p = GetInActiveQueue();
+      if (p) {
+        return p;
+      }
+
+      // If we reach here, it means active_queue is empty. Replace it with
+      // expired queue.
+      active_queue = expired_queue;
+      expired_queue.clear();
+      expired_queue.resize(maxprio);
+      
+      return GetInActiveQueue();
+    }
+};
+
 class Event {
   public:
     Event(int timestamp, shared_ptr<Process> process, int old_process_state,
@@ -291,7 +346,7 @@ class Des {
 shared_ptr<Scheduler> _scheduler = nullptr;
 deque<shared_ptr<Process>> _process_queue;
 Des _des;
-bool _verbose;
+bool _verbose = false;
 shared_ptr<Process> _current_running_process = nullptr;
 int Event::count = 0;
 int Process::count = 0;
@@ -300,6 +355,7 @@ int _block_start_time = 0;
 int _total_block_time = 0;
 int _quantum = 10000;
 int _maxprio = 4;
+bool _is_prio_scheduler = false;
 
 void ReadInput(const string& input_file, const int maxprio) {
 
@@ -369,6 +425,7 @@ void Simulate() {
         process->current_state = Process::ProcessState::READY;
         process->state_transition_ts = current_time;
         process->last_ready_state_trans_event_id = event->event_id;
+        process->dynamic_priority = process->static_priority - 1;
         _scheduler->AddProcess(process);
         call_scheduler = true;
         break;
@@ -383,10 +440,13 @@ void Simulate() {
                                      event->new_process_state)
                << "  cb=" << process->current_cpu_burst
                << " rem=" << process->remaining_cpu_time
-               << " prio=" << process->static_priority - 1
+               << " prio="
+               << (_is_prio_scheduler ? process->dynamic_priority :
+                     process->static_priority - 1)
                << endl;
         }
 
+        --process->dynamic_priority;
         process->current_state = Process::ProcessState::READY;
         process->state_transition_ts = current_time;
         _current_running_process = nullptr;
@@ -412,7 +472,9 @@ void Simulate() {
                                      event->new_process_state)
                << " cb=" << process->current_cpu_burst
                << " rem=" << process->remaining_cpu_time
-               << " prio=" << process->static_priority - 1
+               << " prio="
+               << (_is_prio_scheduler ? process->dynamic_priority :
+                     process->static_priority - 1)
                << endl;
         }
 
@@ -514,6 +576,8 @@ void PrintOutput(string scheduler_type) {
     cout << "SRTF" << endl;
   } else if (scheduler_type[0] == 'R') {
     cout << "RR " << _quantum << endl;
+  } else if (scheduler_type[0] == 'P') {
+    cout << "PRIO " << _quantum << endl;
   }
 
   int total_cpu_usage = 0, total_io_usage = 0, total_cpu_wait_time = 0;
@@ -565,6 +629,16 @@ int main(int argc, char *argv[]) {
         } else if (scheduler_type[0] == 'R') {
           _scheduler = make_shared<RoundRobin>();
           _quantum = stoi(scheduler_type.substr(1));
+        } else if (scheduler_type[0] == 'P') {
+          stringstream ss(scheduler_type.substr(1));
+          string temp_str;
+          getline(ss, temp_str, ':');
+          _quantum = stoi(temp_str);
+          if (!ss.eof()) {
+            getline(ss, temp_str, ':');
+            _maxprio = stoi(temp_str);
+          }
+          _scheduler = make_shared<Prio>(_maxprio);
         }
         break;
       case '?':
@@ -583,6 +657,10 @@ int main(int argc, char *argv[]) {
 
   const string& input_file = argv[optind];
   const string& rand_file = argv[optind + 1];
+
+  if (scheduler_type[0] == 'P' || scheduler_type[0] == 'E') {
+    _is_prio_scheduler = true;
+  }
 
   PopulateRandArray(rand_file);
 

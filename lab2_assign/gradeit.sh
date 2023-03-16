@@ -26,7 +26,7 @@ OUTPRE="out"
 
 # SCHEDS="   F    L    S   R2   R5   P2   P5:3 E2:5  E4"  
 
-SCHEDS="   F    L    S    R2    R5"     # example if you only want to run the F scheduler during development
+SCHEDS="   F    L    S   R2   R5   P2   P5:3"     # example if you only want to run the F scheduler during development
 
 ############################################################################
 #  NO TRACING 
