@@ -10,12 +10,11 @@
 #include <sstream>
 #include <memory>
 #include <set>
-#include <map>
 
 using namespace std;
 
-vector<int> randvals;
-int ofs = 0;
+vector<int> _randvals;
+int _ofs = 0;
 void PopulateRandArray(const string& rand_file) {
 
   ifstream input_file(rand_file);
@@ -28,17 +27,17 @@ void PopulateRandArray(const string& rand_file) {
   // Take the size of file as input.
   input_file >> number;
   while (input_file >> number) {
-    randvals.push_back(number);
+    _randvals.push_back(number);
   }
 
   input_file.close();
 }
 
 int MyRandom(int burst) {
-  if (ofs >= randvals.size()) {
-    ofs = 0;
+  if (_ofs >= _randvals.size()) {
+    _ofs = 0;
   }
-  return 1 + (randvals[ofs++] % burst);
+  return 1 + (_randvals[_ofs++] % burst);
 }
 
 class Process {
@@ -82,7 +81,13 @@ class Process {
       return "";
     }
 
+    void ComputePostCompletionStats(int finish_time) {
+      this->finish_time = finish_time;
+      this->turnaround_time = finish_time - this->arrival_time;
+    }
+
   public:
+    // Static counter to keep count of number of processes.
     static int count;
 
     int pid;
@@ -92,20 +97,24 @@ class Process {
     int max_io_burst;
     int static_priority;
     int current_state;
-    int state_transition_ts;
-    int remaining_cpu_time;
     int finish_time;
     int turnaround_time;
     int time_in_blocked;
     int cpu_wait_time;
-    int current_cpu_burst;
     int dynamic_priority;
-    int next_event_ts;
-    int next_event_id;
 
     // Event ID of the last event which transitioned this process to ready
     // state.
     int last_ready_state_trans_event_id;
+
+    // Time at which previous state transition happened.
+    int state_transition_ts;
+
+    // Currently available CPU burst for this process.
+    int current_cpu_burst;
+
+    // Total amount of work remaining for this process.
+    int remaining_cpu_time;
 };
 
 class Scheduler {
@@ -113,8 +122,6 @@ class Scheduler {
     virtual void AddProcess(shared_ptr<Process> process) = 0;
 
     virtual shared_ptr<Process> GetNextProcess() = 0;
-
-    virtual int GetNextProcessDynamicPrio() = 0;
 };
 
 class Fcfs: public Scheduler {
@@ -133,8 +140,6 @@ class Fcfs: public Scheduler {
       run_queue.pop();
       return process;
     }
-
-    int GetNextProcessDynamicPrio() {}
 };
 
 class Lcfs: public Scheduler {
@@ -153,8 +158,6 @@ class Lcfs: public Scheduler {
       run_queue.pop_back();
       return process;
     }
-
-    int GetNextProcessDynamicPrio() {}
 };
 
 class Srtf: public Scheduler {
@@ -191,8 +194,6 @@ class Srtf: public Scheduler {
 
       return nullptr;
     }
-
-    int GetNextProcessDynamicPrio() {}
 };
 
 class RoundRobin: public Scheduler {
@@ -211,8 +212,6 @@ class RoundRobin: public Scheduler {
       run_queue.pop();
       return process;
     }
-
-    int GetNextProcessDynamicPrio() {}
 };
 
 class Prio: public Scheduler {
@@ -266,17 +265,6 @@ class Prio: public Scheduler {
       
       return GetInActiveQueue();
     }
-
-    int GetNextProcessDynamicPrio() {
-      for (int ii = active_queue.size() - 1; ii >= 0; --ii) {
-        if (active_queue[ii].size() != 0) {
-          shared_ptr<Process> p = active_queue[ii].front();
-          return p->dynamic_priority;
-        }
-      }
-
-      return -1;
-    }
 };
 
 class Event {
@@ -327,84 +315,27 @@ class Event {
     int event_id;
 };
 
-// class Des {
-//   private:
-//     class Comparator{
-//       public:
-//         bool operator() (const shared_ptr<Event> event1,
-//                          const shared_ptr<Event> event2) {
-//           if (event1->timestamp != event2->timestamp) {
-//             return event1->timestamp > event2->timestamp;
-//           } else {
-//             // To honour stability.
-//             return event1->event_id > event2->event_id;
-//           }
-//         }
-//     };
-
-//     set<shared_ptr<Event>, Comparator> event_q;
-
-//   public:
-//     shared_ptr<Event> GetEvent() {
-//       if (event_q.size() != 0) {
-//         shared_ptr<Event> e = *event_q.begin();
-//         event_q.erase(event_q.begin());
-//         return e;
-//       }
-
-//       return nullptr;
-//     }
-
-//     void AddEvent(shared_ptr<Event> event) {
-//       event_q.insert(event);
-//     }
-
-//     int GetNextEventTime() {
-//       if (event_q.size() == 0) {
-//         return -1;
-//       }
-//       return (*event_q.begin())->timestamp;
-//     }
-
-//     void RmEvent(int pid) {
-//       auto itr = event_q.begin();
-//       for (; itr != event_q.end(); ++itr) {
-//         if ((*itr)->process->pid == pid) {
-//           break;
-//         }
-//       }
-
-//       event_q.erase(itr);
-//     }
-// };
-
 class Des {
   private:
-    class Comparator{
-      public:
-        bool operator() (const shared_ptr<Event> event1,
-                         const shared_ptr<Event> event2) {
-          if (event1->timestamp != event2->timestamp) {
-            return event1->timestamp > event2->timestamp;
-          } else {
-            // To honour stability.
-            return event1->event_id > event2->event_id;
-          }
+    struct Comparator{
+      bool operator() (const shared_ptr<Event> event1,
+                       const shared_ptr<Event> event2) const {
+        if (event1->timestamp != event2->timestamp) {
+          return event1->timestamp < event2->timestamp;
+        } else {
+          // To honour stability.
+          return event1->event_id < event2->event_id;
         }
+      }
     };
 
-    priority_queue<shared_ptr<Event>, vector<shared_ptr<Event>>,
-                   Comparator> event_q;
-    set<int> deleted_set;
+    set<shared_ptr<Event>, Comparator> event_q;
 
   public:
     shared_ptr<Event> GetEvent() {
-      while (event_q.size() != 0) {
-        shared_ptr<Event> e = event_q.top();
-        event_q.pop();
-        if (deleted_set.find(e->event_id) != deleted_set.end()) {
-          continue;
-        }
+      if (event_q.size() != 0) {
+        shared_ptr<Event> e = *(event_q.begin());
+        event_q.erase(event_q.begin());
         return e;
       }
 
@@ -412,24 +343,34 @@ class Des {
     }
 
     void AddEvent(shared_ptr<Event> event) {
-      event_q.push(event);
+      event_q.insert(event);
     }
 
     int GetNextEventTime() {
-      while (event_q.size() != 0) {
-        shared_ptr<Event> e = event_q.top();
-        if (deleted_set.find(e->event_id) != deleted_set.end()) {
-          event_q.pop();
-          continue;
+      if (event_q.size() == 0) {
+        return -1;
+      }
+      return (*(event_q.begin()))->timestamp;
+    }
+
+    int GetNextEventTime(int pid) {
+      for (auto itr = event_q.begin(); itr != event_q.end(); ++itr) {
+        if ((*itr)->process->pid == pid) {
+          return (*itr)->timestamp;
+          break;
         }
-        return e->timestamp;
       }
       
       return -1;
     }
 
-    void RmEvent(int event_id) {
-      deleted_set.insert(event_id);
+    void RmEvent(int pid) {
+      for (auto itr = event_q.begin(); itr != event_q.end(); ++itr) {
+        if ((*itr)->process->pid == pid) {
+          event_q.erase(itr);
+          break;
+        }
+      }
     }
 };
 
@@ -526,28 +467,26 @@ void Simulate() {
         if (_is_pre_prio_scheduler && _current_running_process) {
           bool cond1 = (process->dynamic_priority >
                           _current_running_process->dynamic_priority);
-          bool cond2 = _current_running_process->next_event_ts > current_time;
+          
+          int next_event_ts = _des.GetNextEventTime(
+            _current_running_process->pid);
+          bool cond2 = (next_event_ts > current_time);
           if (_preemption_logs) {
             cout << "    --> PrioPreempt Cond1=" << cond1 << " " << "Cond2="
                  << cond2 << " ("
-                 << _current_running_process->next_event_ts - current_time
-                 << ")" << " --> " << ((cond1 && cond2) ? "YES" : "NO")
-                 << endl;
+                 << next_event_ts - current_time << ")" << " --> "
+                 << ((cond1 && cond2) ? "YES" : "NO") << endl;
           }
-          if (process->dynamic_priority >
-                _current_running_process->dynamic_priority &&
-              _current_running_process->next_event_ts > current_time) {
+          if (cond1 && cond2) {
             // There is a process with a higher priority waiting to run. Delete
-            // the future event scheduled for this process and create a preempt
-            // event for current running process at current time.
-
-            _des.RmEvent(_current_running_process->next_event_id);
+            // the future event scheduled for currently running process and
+            // create a preempt event for current running process at current
+            // time.
+            _des.RmEvent(_current_running_process->pid);
             shared_ptr<Event> new_event = make_shared<Event>(
               current_time, _current_running_process,
               _current_running_process->current_state,
               Process::ProcessState::READY);
-            _current_running_process->next_event_ts = current_time;
-            _current_running_process->next_event_id = new_event->event_id;
             _des.AddEvent(new_event);
           }
         }
@@ -614,8 +553,6 @@ void Simulate() {
             current_time + process->current_cpu_burst, process,
             process->current_state, Process::ProcessState::BLOCKED);
         }
-        process->next_event_ts = new_event->timestamp;
-        process->next_event_id = new_event->event_id;
         _des.AddEvent(new_event);
         break;
       }
@@ -658,8 +595,7 @@ void Simulate() {
                  << "Done"
                  << endl;
           }
-          process->finish_time = current_time;
-          process->turnaround_time = current_time - process->arrival_time;
+          process->ComputePostCompletionStats(current_time);
         }
         _current_running_process = nullptr;
         call_scheduler = true;
