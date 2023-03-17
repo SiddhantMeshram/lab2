@@ -9,6 +9,8 @@
 #include <queue>
 #include <sstream>
 #include <memory>
+#include <set>
+#include <map>
 
 using namespace std;
 
@@ -97,8 +99,13 @@ class Process {
     int time_in_blocked;
     int cpu_wait_time;
     int current_cpu_burst;
-    int last_ready_state_trans_event_id;
     int dynamic_priority;
+    int next_event_ts;
+    int next_event_id;
+
+    // Event ID of the last event which transitioned this process to ready
+    // state.
+    int last_ready_state_trans_event_id;
 };
 
 class Scheduler {
@@ -106,6 +113,8 @@ class Scheduler {
     virtual void AddProcess(shared_ptr<Process> process) = 0;
 
     virtual shared_ptr<Process> GetNextProcess() = 0;
+
+    virtual int GetNextProcessDynamicPrio() = 0;
 };
 
 class Fcfs: public Scheduler {
@@ -124,6 +133,8 @@ class Fcfs: public Scheduler {
       run_queue.pop();
       return process;
     }
+
+    int GetNextProcessDynamicPrio() {}
 };
 
 class Lcfs: public Scheduler {
@@ -142,6 +153,8 @@ class Lcfs: public Scheduler {
       run_queue.pop_back();
       return process;
     }
+
+    int GetNextProcessDynamicPrio() {}
 };
 
 class Srtf: public Scheduler {
@@ -178,6 +191,8 @@ class Srtf: public Scheduler {
 
       return nullptr;
     }
+
+    int GetNextProcessDynamicPrio() {}
 };
 
 class RoundRobin: public Scheduler {
@@ -196,6 +211,8 @@ class RoundRobin: public Scheduler {
       run_queue.pop();
       return process;
     }
+
+    int GetNextProcessDynamicPrio() {}
 };
 
 class Prio: public Scheduler {
@@ -249,6 +266,17 @@ class Prio: public Scheduler {
       
       return GetInActiveQueue();
     }
+
+    int GetNextProcessDynamicPrio() {
+      for (int ii = active_queue.size() - 1; ii >= 0; --ii) {
+        if (active_queue[ii].size() != 0) {
+          shared_ptr<Process> p = active_queue[ii].front();
+          return p->dynamic_priority;
+        }
+      }
+
+      return -1;
+    }
 };
 
 class Event {
@@ -299,6 +327,57 @@ class Event {
     int event_id;
 };
 
+// class Des {
+//   private:
+//     class Comparator{
+//       public:
+//         bool operator() (const shared_ptr<Event> event1,
+//                          const shared_ptr<Event> event2) {
+//           if (event1->timestamp != event2->timestamp) {
+//             return event1->timestamp > event2->timestamp;
+//           } else {
+//             // To honour stability.
+//             return event1->event_id > event2->event_id;
+//           }
+//         }
+//     };
+
+//     set<shared_ptr<Event>, Comparator> event_q;
+
+//   public:
+//     shared_ptr<Event> GetEvent() {
+//       if (event_q.size() != 0) {
+//         shared_ptr<Event> e = *event_q.begin();
+//         event_q.erase(event_q.begin());
+//         return e;
+//       }
+
+//       return nullptr;
+//     }
+
+//     void AddEvent(shared_ptr<Event> event) {
+//       event_q.insert(event);
+//     }
+
+//     int GetNextEventTime() {
+//       if (event_q.size() == 0) {
+//         return -1;
+//       }
+//       return (*event_q.begin())->timestamp;
+//     }
+
+//     void RmEvent(int pid) {
+//       auto itr = event_q.begin();
+//       for (; itr != event_q.end(); ++itr) {
+//         if ((*itr)->process->pid == pid) {
+//           break;
+//         }
+//       }
+
+//       event_q.erase(itr);
+//     }
+// };
+
 class Des {
   private:
     class Comparator{
@@ -316,12 +395,16 @@ class Des {
 
     priority_queue<shared_ptr<Event>, vector<shared_ptr<Event>>,
                    Comparator> event_q;
+    set<int> deleted_set;
 
   public:
     shared_ptr<Event> GetEvent() {
-      if (event_q.size() != 0) {
+      while (event_q.size() != 0) {
         shared_ptr<Event> e = event_q.top();
         event_q.pop();
+        if (deleted_set.find(e->event_id) != deleted_set.end()) {
+          continue;
+        }
         return e;
       }
 
@@ -333,10 +416,20 @@ class Des {
     }
 
     int GetNextEventTime() {
-      if (event_q.size() == 0) {
-        return -1;
+      while (event_q.size() != 0) {
+        shared_ptr<Event> e = event_q.top();
+        if (deleted_set.find(e->event_id) != deleted_set.end()) {
+          event_q.pop();
+          continue;
+        }
+        return e->timestamp;
       }
-      return event_q.top()->timestamp;
+      
+      return -1;
+    }
+
+    void RmEvent(int event_id) {
+      deleted_set.insert(event_id);
     }
 };
 
@@ -356,6 +449,7 @@ int _total_block_time = 0;
 int _quantum = 10000;
 int _maxprio = 4;
 bool _is_prio_scheduler = false;
+bool _is_pre_prio_scheduler = false;
 
 void ReadInput(const string& input_file, const int maxprio) {
 
@@ -427,6 +521,36 @@ void Simulate() {
         process->last_ready_state_trans_event_id = event->event_id;
         process->dynamic_priority = process->static_priority - 1;
         _scheduler->AddProcess(process);
+
+        // if (_is_pre_prio_scheduler && _current_running_process) {
+        //   bool cond1 = (process->dynamic_priority >
+        //                   _current_running_process->dynamic_priority);
+        //   bool cond2 = _current_running_process->next_event_ts > current_time;
+        //   if (_verbose) {
+        //     cout << "    --> PrioPreempt Cond1=" << cond1 << " " << "Cond2="
+        //          << cond2 << " ("
+        //          << _current_running_process->next_event_ts - current_time
+        //          << ")" << " --> " << ((cond1 && cond2) ? "YES" : "NO")
+        //          << endl;
+        //   }
+        //   if (process->dynamic_priority >
+        //         _current_running_process->dynamic_priority &&
+        //       _current_running_process->next_event_ts > current_time) {
+        //     // There is a process with a higher priority waiting to run. Delete
+        //     // the future event scheduled for this process and create a preempt
+        //     // event for current running process at current time.
+
+        //     _des.RmEvent(_current_running_process->next_event_id);
+        //     shared_ptr<Event> new_event = make_shared<Event>(
+        //       current_time, _current_running_process,
+        //       _current_running_process->current_state,
+        //       Process::ProcessState::READY);
+        //     _current_running_process->next_event_ts = current_time;
+        //     _current_running_process->next_event_id = new_event->event_id;
+        //     _des.AddEvent(new_event);
+        //   }
+        // }
+
         call_scheduler = true;
         break;
       }
@@ -489,6 +613,8 @@ void Simulate() {
             current_time + process->current_cpu_burst, process,
             process->current_state, Process::ProcessState::BLOCKED);
         }
+        process->next_event_ts = new_event->timestamp;
+        process->next_event_id = new_event->event_id;
         _des.AddEvent(new_event);
         break;
       }
@@ -559,7 +685,20 @@ void Simulate() {
           _current_running_process->current_state,
           Process::ProcessState::RUNNING);
         _des.AddEvent(new_event);
-      }
+      } else if (_scheduler->GetNextProcessDynamicPrio() >
+                  _current_running_process->dynamic_priority &&
+                 _is_pre_prio_scheduler) {
+              // There is a process with a higher priority waiting to run. Delete
+              // the future event scheduled for this process and create a preempt
+              // event for current running process at current time.
+
+              _des.RmEvent(_current_running_process->next_event_id);
+              shared_ptr<Event> new_event = make_shared<Event>(
+                current_time, _current_running_process,
+                _current_running_process->current_state,
+                Process::ProcessState::READY);
+              _des.AddEvent(new_event);
+            }
     }
   }
 }
@@ -578,6 +717,8 @@ void PrintOutput(string scheduler_type) {
     cout << "RR " << _quantum << endl;
   } else if (scheduler_type[0] == 'P') {
     cout << "PRIO " << _quantum << endl;
+  } else if (scheduler_type[0] == 'E') {
+    cout << "PREPRIO " << _quantum << endl;
   }
 
   int total_cpu_usage = 0, total_io_usage = 0, total_cpu_wait_time = 0;
@@ -629,7 +770,11 @@ int main(int argc, char *argv[]) {
         } else if (scheduler_type[0] == 'R') {
           _scheduler = make_shared<RoundRobin>();
           _quantum = stoi(scheduler_type.substr(1));
-        } else if (scheduler_type[0] == 'P') {
+        } else if (scheduler_type[0] == 'P' || scheduler_type[0] == 'E') {
+          _is_prio_scheduler = true;
+          if (scheduler_type[0] == 'E') {
+            _is_pre_prio_scheduler = true;
+          }
           stringstream ss(scheduler_type.substr(1));
           string temp_str;
           getline(ss, temp_str, ':');
@@ -656,11 +801,7 @@ int main(int argc, char *argv[]) {
     }
 
   const string& input_file = argv[optind];
-  const string& rand_file = argv[optind + 1];
-
-  if (scheduler_type[0] == 'P' || scheduler_type[0] == 'E') {
-    _is_prio_scheduler = true;
-  }
+  const string& rand_file = argv[optind + 1];  
 
   PopulateRandArray(rand_file);
 
