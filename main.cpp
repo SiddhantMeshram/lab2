@@ -162,19 +162,18 @@ class Lcfs: public Scheduler {
 
 class Srtf: public Scheduler {
   private:
-    class Comparator{
-      public:
-        bool operator() (const shared_ptr<Process> process1,
-                         const shared_ptr<Process> process2) {
-          if (process1->remaining_cpu_time != process2->remaining_cpu_time) {
-            return process1->remaining_cpu_time > process2->remaining_cpu_time;
-          } else {
-            // To handle cases where remaining time is same, use the event id
-            // to figure out which process was queued first.
-            return (process1->last_ready_state_trans_event_id >
-                      process2->last_ready_state_trans_event_id);
-          }
+    struct Comparator {
+      bool operator() (const shared_ptr<Process> process1,
+                       const shared_ptr<Process> process2) const {
+        if (process1->remaining_cpu_time != process2->remaining_cpu_time) {
+          return process1->remaining_cpu_time > process2->remaining_cpu_time;
+        } else {
+          // To handle cases where remaining time is same, use the event id
+          // to figure out which process was queued first.
+          return (process1->last_ready_state_trans_event_id >
+                    process2->last_ready_state_trans_event_id);
         }
+      }
     };
 
     priority_queue<shared_ptr<Process>, vector<shared_ptr<Process>>,
@@ -317,18 +316,20 @@ class Event {
 
 class Des {
   private:
-    struct Comparator{
+    struct Comparator {
       bool operator() (const shared_ptr<Event> event1,
                        const shared_ptr<Event> event2) const {
         if (event1->timestamp != event2->timestamp) {
           return event1->timestamp < event2->timestamp;
         } else {
-          // To honour stability.
+          // To honour stability, ie. event getting queued first will be
+          // executed before the event which gets queued second.
           return event1->event_id < event2->event_id;
         }
       }
     };
 
+    // Using a set to act as a priority queue with the help of a comparator.
     set<shared_ptr<Event>, Comparator> event_q;
 
   public:
