@@ -440,6 +440,7 @@ shared_ptr<Scheduler> _scheduler = nullptr;
 deque<shared_ptr<Process>> _process_queue;
 Des _des;
 bool _verbose = false;
+bool _preemption_logs = false;
 shared_ptr<Process> _current_running_process = nullptr;
 int Event::count = 0;
 int Process::count = 0;
@@ -522,34 +523,34 @@ void Simulate() {
         process->dynamic_priority = process->static_priority - 1;
         _scheduler->AddProcess(process);
 
-        // if (_is_pre_prio_scheduler && _current_running_process) {
-        //   bool cond1 = (process->dynamic_priority >
-        //                   _current_running_process->dynamic_priority);
-        //   bool cond2 = _current_running_process->next_event_ts > current_time;
-        //   if (_verbose) {
-        //     cout << "    --> PrioPreempt Cond1=" << cond1 << " " << "Cond2="
-        //          << cond2 << " ("
-        //          << _current_running_process->next_event_ts - current_time
-        //          << ")" << " --> " << ((cond1 && cond2) ? "YES" : "NO")
-        //          << endl;
-        //   }
-        //   if (process->dynamic_priority >
-        //         _current_running_process->dynamic_priority &&
-        //       _current_running_process->next_event_ts > current_time) {
-        //     // There is a process with a higher priority waiting to run. Delete
-        //     // the future event scheduled for this process and create a preempt
-        //     // event for current running process at current time.
+        if (_is_pre_prio_scheduler && _current_running_process) {
+          bool cond1 = (process->dynamic_priority >
+                          _current_running_process->dynamic_priority);
+          bool cond2 = _current_running_process->next_event_ts > current_time;
+          if (_preemption_logs) {
+            cout << "    --> PrioPreempt Cond1=" << cond1 << " " << "Cond2="
+                 << cond2 << " ("
+                 << _current_running_process->next_event_ts - current_time
+                 << ")" << " --> " << ((cond1 && cond2) ? "YES" : "NO")
+                 << endl;
+          }
+          if (process->dynamic_priority >
+                _current_running_process->dynamic_priority &&
+              _current_running_process->next_event_ts > current_time) {
+            // There is a process with a higher priority waiting to run. Delete
+            // the future event scheduled for this process and create a preempt
+            // event for current running process at current time.
 
-        //     _des.RmEvent(_current_running_process->next_event_id);
-        //     shared_ptr<Event> new_event = make_shared<Event>(
-        //       current_time, _current_running_process,
-        //       _current_running_process->current_state,
-        //       Process::ProcessState::READY);
-        //     _current_running_process->next_event_ts = current_time;
-        //     _current_running_process->next_event_id = new_event->event_id;
-        //     _des.AddEvent(new_event);
-        //   }
-        // }
+            _des.RmEvent(_current_running_process->next_event_id);
+            shared_ptr<Event> new_event = make_shared<Event>(
+              current_time, _current_running_process,
+              _current_running_process->current_state,
+              Process::ProcessState::READY);
+            _current_running_process->next_event_ts = current_time;
+            _current_running_process->next_event_id = new_event->event_id;
+            _des.AddEvent(new_event);
+          }
+        }
 
         call_scheduler = true;
         break;
@@ -685,20 +686,7 @@ void Simulate() {
           _current_running_process->current_state,
           Process::ProcessState::RUNNING);
         _des.AddEvent(new_event);
-      } else if (_scheduler->GetNextProcessDynamicPrio() >
-                  _current_running_process->dynamic_priority &&
-                 _is_pre_prio_scheduler) {
-              // There is a process with a higher priority waiting to run. Delete
-              // the future event scheduled for this process and create a preempt
-              // event for current running process at current time.
-
-              _des.RmEvent(_current_running_process->next_event_id);
-              shared_ptr<Event> new_event = make_shared<Event>(
-                current_time, _current_running_process,
-                _current_running_process->current_state,
-                Process::ProcessState::READY);
-              _des.AddEvent(new_event);
-            }
+      }
     }
   }
 }
@@ -754,10 +742,13 @@ int main(int argc, char *argv[]) {
 
   string scheduler_type;
   int c;
-  while((c = getopt(argc, argv, "vs:")) != -1)
+  while((c = getopt(argc, argv, "vps:")) != -1)
     switch (c) {
       case 'v':
         _verbose = true;
+        break;
+      case 'p':
+        _preemption_logs = true;
         break;
       case 's':
         scheduler_type = optarg;
