@@ -266,6 +266,59 @@ class Prio: public Scheduler {
     }
 };
 
+class PrePrio: public Scheduler {
+  private:
+    vector<queue<shared_ptr<Process>>> active_queue;
+    vector<queue<shared_ptr<Process>>> expired_queue;
+
+    int maxprio;
+
+  public:
+    PrePrio (int maxprio) :
+      maxprio(maxprio) {
+
+      active_queue.resize(maxprio);
+      expired_queue.resize(maxprio);
+    }
+
+    void AddProcess(shared_ptr<Process> process) {
+      if (process->dynamic_priority == -1) {
+        process->dynamic_priority = process->static_priority - 1;
+        expired_queue[process->dynamic_priority].push(process);
+        return;
+      }
+
+      active_queue[process->dynamic_priority].push(process);
+    }
+
+    shared_ptr<Process> GetInActiveQueue() {
+      for (int ii = active_queue.size() - 1; ii >= 0; --ii) {
+        if (active_queue[ii].size() != 0) {
+          shared_ptr<Process> p = active_queue[ii].front();
+          active_queue[ii].pop();
+          return p;
+        }
+      }
+
+      return nullptr;
+    }
+
+    shared_ptr<Process> GetNextProcess() {
+      shared_ptr<Process> p = GetInActiveQueue();
+      if (p) {
+        return p;
+      }
+
+      // If we reach here, it means active_queue is empty. Replace it with
+      // expired queue.
+      active_queue = expired_queue;
+      expired_queue.clear();
+      expired_queue.resize(maxprio);
+      
+      return GetInActiveQueue();
+    }
+};
+
 class Event {
   public:
     Event(int timestamp, shared_ptr<Process> process, int old_process_state,
@@ -711,7 +764,12 @@ int main(int argc, char *argv[]) {
             getline(ss, temp_str, ':');
             _maxprio = stoi(temp_str);
           }
-          _scheduler = make_shared<Prio>(_maxprio);
+          if (scheduler_type[0] == 'E') {
+            _is_pre_prio_scheduler = true;
+            _scheduler = make_shared<PrePrio>(_maxprio);
+          } else {
+            _scheduler = make_shared<Prio>(_maxprio);
+          }
         }
         break;
       case '?':
