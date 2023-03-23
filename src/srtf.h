@@ -21,6 +21,9 @@ class Srtf: public Scheduler {
                        const shared_ptr<Process> process2) const {
         if (process1->remaining_cpu_time != process2->remaining_cpu_time) {
           return process1->remaining_cpu_time > process2->remaining_cpu_time;
+        } else if (process1->state_transition_ts !=
+                     process2->state_transition_ts) {
+          return process1->state_transition_ts > process2->state_transition_ts;
         } else {
           // To handle cases where remaining time is same, use the event id
           // to figure out which process was queued first.
