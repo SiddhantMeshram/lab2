@@ -8,6 +8,8 @@ class Process;
 
 class Scheduler {
   public:
+    virtual ~Scheduler() {}
+
     virtual void AddProcess(std::shared_ptr<Process> process) = 0;
 
     virtual std::shared_ptr<Process> GetNextProcess() = 0;

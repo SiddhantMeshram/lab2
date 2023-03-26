@@ -18,7 +18,6 @@
 #include "srtf.h"
 #include "round_robin.h"
 #include "prio.h"
-#include "pre_prio.h"
 #include "event.h"
 #include "des.h"
 
@@ -89,10 +88,9 @@ void Main::ProcessInput(const string& input_file, const string& rand_file) {
 
     if (_scheduler_type[0] == 'E') {
       _is_pre_prio_scheduler = true;
-      _scheduler = make_shared<PrePrio>(_maxprio);
-    } else {
-      _scheduler = make_shared<Prio>(_maxprio);
     }
+
+    _scheduler = make_shared<Prio>(_maxprio);
   }
 
   PopulateRandArray(rand_file);
